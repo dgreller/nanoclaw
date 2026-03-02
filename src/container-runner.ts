@@ -18,6 +18,7 @@ import {
 import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { getValidToken } from './oauth-refresh.js';
 import {
   CONTAINER_RUNTIME_BIN,
   readonlyMountArgs,
@@ -213,14 +214,20 @@ function buildVolumeMounts(
 /**
  * Read allowed secrets from .env for passing to the container via stdin.
  * Secrets are never written to disk or mounted as files.
+ * If a fresh OAuth token is available from the keychain, it overlays the .env value.
  */
-function readSecrets(): Record<string, string> {
-  return readEnvFile([
+async function readSecrets(): Promise<Record<string, string>> {
+  const secrets = readEnvFile([
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_AUTH_TOKEN',
   ]);
+  const freshToken = await getValidToken();
+  if (freshToken) {
+    secrets.CLAUDE_CODE_OAUTH_TOKEN = freshToken;
+  }
+  return secrets;
 }
 
 function buildContainerArgs(
@@ -297,6 +304,9 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
+  // Read secrets (including fresh OAuth token) before spawning the container
+  const secrets = await readSecrets();
+
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -310,7 +320,7 @@ export async function runContainerAgent(
     let stderrTruncated = false;
 
     // Pass secrets via stdin (never written to disk or mounted as files)
-    input.secrets = readSecrets();
+    input.secrets = secrets;
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
     // Remove secrets from input so they don't appear in logs

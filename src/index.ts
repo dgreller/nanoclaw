@@ -37,6 +37,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { initOAuthCache, startOAuthRefreshTimer } from './oauth-refresh.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -451,9 +452,14 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Initialize OAuth token cache and background refresh
+  initOAuthCache();
+  const cancelOAuthTimer = startOAuthRefreshTimer();
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    cancelOAuthTimer();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
